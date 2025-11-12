@@ -114,6 +114,26 @@ class EnergyParser:
             "is_fallback": True
         }
 
+def _is_current_time_in_range(current_time, start_time, end_time):
+    """Проверяет, находится ли текущее время в заданном диапазоне"""
+    try:
+        current_minutes = _time_to_minutes(current_time)
+        start_minutes = _time_to_minutes(start_time)
+        end_minutes = _time_to_minutes(end_time)
+        
+        # Обработка перехода через полночь
+        if end_time == "24:00":
+            end_minutes = 24 * 60
+            
+        return start_minutes <= current_minutes < end_minutes
+    except:
+        return False
+
+def _time_to_minutes(time_str):
+    """Конвертирует время HH:MM в минуты с начала дня"""
+    hours, minutes = map(int, time_str.split(':'))
+    return hours * 60 + minutes
+
 # Глобальные объекты
 energy_parser = EnergyParser()
 
@@ -141,18 +161,72 @@ async def light_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if status["has_power"]:
         emoji = "🟢"
         status_text = "РАБОТАЕТ"
+        
+        # Определяем следующее отключение
+        current_time = datetime.now()
+        current_hour = current_time.hour
+        
+        if current_hour < 2 or (current_hour == 2 and current_time.minute < 30):
+            next_outage = "02:30-06:30"
+        elif current_hour < 13:
+            next_outage = "13:00-17:00"
+        else:
+            next_outage = "завтра 02:30-06:30"
+        
+        message = f"{emoji} Свет {status_text}\n⏰ Следующее отключение: {next_outage}"
     else:
         emoji = "🔴"
         status_text = "НЕ РАБОТАЕТ"
+        
+        # Вычисляем время до включения
+        current_time = datetime.now()
+        current_hour = current_time.hour
+        
+        if 2 <= current_hour < 6 or (current_hour == 6 and current_time.minute < 30):
+            # Отключение до 6:30
+            target_time = current_time.replace(hour=6, minute=30, second=0, microsecond=0)
+            if current_hour >= 6:
+                target_time = target_time
+        else:  # 13-17 часов
+            # Отключение до 17:00
+            target_time = current_time.replace(hour=17, minute=0, second=0, microsecond=0)
+        
+        time_diff = target_time - current_time
+        total_minutes = int(time_diff.total_seconds() // 60)
+        hours_left = total_minutes // 60
+        minutes_left = total_minutes % 60
+        
+        if hours_left > 0:
+            time_left = f"{hours_left}ч {minutes_left}м"
+        else:
+            time_left = f"{minutes_left}м"
+        
+        message = f"{emoji} Свет {status_text}\n⏳ До включения: {time_left}"
     
-    message = f"{emoji} **Свет:** {status_text}\n"
-    message += f"🏠 Адрес: вул. Гміри Бориса 14-А\n"
-    message += f"🔢 Очередь: {status['queue']}\n"
-    message += f"🕐 Обновлено: {status['update_time']}\n"
+    # Добавляем расписание на день
+    message += f"\n\n📅 **Расписание на сегодня:**\n"
     
-    if status.get("is_fallback"):
-        message += f"\n📊 Источник: {status['source']}"
-        message += f"\n📅 Расписание: 02:30-06:30, 13:00-17:00"
+    # Создаем полное расписание дня
+    day_schedule = [
+        ("00:00-02:30", "🟢 Свет есть"),
+        ("02:30-06:30", "🔴 Отключение"), 
+        ("06:30-13:00", "🟢 Свет есть"),
+        ("13:00-17:00", "🔴 Отключение"),
+        ("17:00-24:00", "🟢 Свет есть")
+    ]
+    
+    current_time = datetime.now()
+    current_period = f"{current_time.hour:02d}:{current_time.minute:02d}"
+    
+    for time_range, description in day_schedule:
+        start_time = time_range.split('-')[0]
+        end_time = time_range.split('-')[1]
+        
+        # Отмечаем текущий период
+        if _is_current_time_in_range(current_period, start_time, end_time):
+            message += f"➤ **{time_range}** - {description}\n"
+        else:
+            message += f"   {time_range} - {description}\n"
     
     await update.message.reply_text(message, parse_mode='Markdown')
 
