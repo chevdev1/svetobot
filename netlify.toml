@@ -1,18 +1,12 @@
 [build]
   functions = "netlify/functions"
   publish = "public"
-  command = "echo 'SvetBot build complete'"
   
 [build.environment]
-  PYTHON_VERSION = "3.12"
-  
-[functions]
-  external_node_modules = []
+  PYTHON_VERSION = "3.9"
 
-[dev]
-  framework = "#custom"
-  command = "python svetbot.py"
-  targetPort = 8000
+[functions]
+  directory = "netlify/functions"
 
 [[headers]]
   for = "/*"

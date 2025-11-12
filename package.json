@@ -1,0 +1,15 @@
+{
+  "name": "svetbot",
+  "version": "2.0.0",
+  "description": "Telegram Bot for monitoring power outages in Kyiv",
+  "main": "netlify/functions/bot.py",
+  "scripts": {
+    "build": "echo 'SvetBot build complete'",
+    "start": "echo 'SvetBot serverless mode'"
+  },
+  "keywords": ["telegram", "bot", "kyiv", "power", "netlify"],
+  "author": "chevdev1",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {}
+}
