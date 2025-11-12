@@ -1,0 +1,21 @@
+[build]
+  functions = "netlify/functions"
+  publish = "public"
+  command = "echo 'SvetBot build complete'"
+  
+[build.environment]
+  PYTHON_VERSION = "3.12"
+  
+[functions]
+  external_node_modules = []
+
+[dev]
+  framework = "#custom"
+  command = "python svetbot.py"
+  targetPort = 8000
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-XSS-Protection = "1; mode=block"

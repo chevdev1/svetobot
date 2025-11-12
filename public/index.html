@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SvetBot - Telegram Bot</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            color: white;
+            text-align: center;
+            padding: 50px 20px;
+            margin: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: rgba(255,255,255,0.1);
+            padding: 40px;
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+        }
+        h1 {
+            font-size: 3em;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+        .emoji {
+            font-size: 4em;
+            margin: 20px 0;
+        }
+        .status {
+            background: #4CAF50;
+            padding: 15px 30px;
+            border-radius: 50px;
+            display: inline-block;
+            margin: 20px 0;
+            font-weight: bold;
+        }
+        .commands {
+            text-align: left;
+            background: rgba(255,255,255,0.1);
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 30px;
+        }
+        .command {
+            margin: 10px 0;
+            font-family: 'Courier New', monospace;
+            background: rgba(0,0,0,0.3);
+            padding: 8px 12px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="emoji">🤖⚡</div>
+        <h1>SvetBot</h1>
+        <p>Telegram бот для мониторинга света в Киеве</p>
+        
+        <div class="status">🟢 БОТ АКТИВЕН</div>
+        
+        <div class="commands">
+            <h3>🎯 Доступные команды:</h3>
+            <div class="command">/start - Приветствие и инструкции</div>
+            <div class="command">/svet - Проверить состояние света в Киеве</div>
+            <div class="command">/status - Общий статус бота</div>
+            <div class="command">/info - Информация о боте</div>
+            <div class="command">/smoke - Анимация покурить с рейтингом 🌿</div>
+            <div class="command">/smokers - Топ курильщиков</div>
+        </div>
+        
+        <p style="margin-top: 40px; opacity: 0.7;">
+            Развернуто на Netlify | 
+            <span id="time"></span>
+        </p>
+    </div>
+    
+    <script>
+        document.getElementById('time').textContent = new Date().toLocaleString('ru-RU');
+    </script>
+</body>
+</html>

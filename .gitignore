@@ -1,0 +1,29 @@
+# Игнорировать файлы конфигурации с секретными данными
+config.py
+.env
+
+# Игнорировать Python кэш и виртуальное окружение
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+
+# Игнорировать IDE файлы
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Игнорировать логи
+*.log
+logs/
+
+# Игнорировать временные файлы
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
