@@ -2,14 +2,14 @@
 # -*- coding: utf-8 -*-
 """
 SVETBOT - PythonAnywhere версия
-Telegram Bot с командой /smoke и рейтингом курильщиков для 24/7 работы
+Telegram Bot с командой /smoke, /dick и рейтингом для 24/7 работы
 """
 
 import asyncio
 import logging
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 from bs4 import BeautifulSoup
 import time
@@ -137,6 +137,72 @@ def _time_to_minutes(time_str):
 # Глобальные объекты
 energy_parser = EnergyParser()
 
+# Система шляпы (dick size)
+def load_dick_stats():
+    """Загружает статистику размеров шляпы"""
+    try:
+        if os.path.exists("dick_stats.json"):
+            with open("dick_stats.json", 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except:
+        pass
+    return {}
+
+def save_dick_stats(stats):
+    """Сохраняет статистику размеров шляпы"""
+    try:
+        with open("dick_stats.json", 'w', encoding='utf-8') as f:
+            json.dump(stats, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Ошибка сохранения dick stats: {e}")
+
+def get_dick_size_text(size):
+    """Возвращает описание размера шляпы"""
+    if size <= 0:
+        return "🚫 Шляпа полностью исчезла!"
+    elif size <= 5:
+        return "🤏 Совсем маленькая шляпка"
+    elif size <= 10:
+        return "👒 Скромная шляпка"
+    elif size <= 20:
+        return "🎩 Приличная шляпа"
+    elif size <= 30:
+        return "👑 Королевская шляпа"
+    elif size <= 50:
+        return "⭐ Легендарная шляпа"
+    else:
+        return "💎 БОЖЕСТВЕННАЯ ШЛЯПА!!!"
+
+def get_dick_encouragement(change):
+    """Возвращает случайное поздравление/утешение"""
+    positive = [
+        "Так держать! 💪",
+        "Красавец! 🔥",
+        "Молодец! 🎉",
+        "Ты легенда! 👑",
+        "Супер! ⭐",
+        "Отлично! 🚀",
+        "Потрясающе! 💫",
+        "Богатырь! 🛡️",
+        "Чемпион! 🏆",
+        "Воин! ⚔️"
+    ]
+    
+    negative = [
+        "Бывает... 😞",
+        "В следующий раз повезет! 🍀",
+        "Не расстраивайся! 💪",
+        "Будь бдителен! 👀",
+        "Опыт - это хорошо! 📚",
+        "Приходи завтра! 🌅",
+        "Может быть завтра! 🤞",
+        "Не сдавайся! 💪",
+        "Удача изменится! 🎲",
+        "Вечно молодой! 😎"
+    ]
+    
+    return random.choice(positive if change > 0 else negative)
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start"""
     user_name = update.effective_user.first_name
@@ -146,13 +212,276 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/svet - статус света в Киеве ⚡\n"
         "/smoke - покурить косячок 🌿💨\n"
         "/smokers - рейтинг курильщиков 🏆\n"
+        "/dick - отрастить шляпу 👒\n"
+        "/stealdick @юзер - украсть см шляпы 🔓\n"
+        "/dickplaces - топ по размеру шляпы 👑\n"
+        "/dickmini - мини игра на см 🎮\n"
         "/status - подробная информация 📊\n"
         "/help - справка 📖\n\n"
         "🏠 Адрес: Киев, вул. Гміри Бориса 14-А (очередь 1.1)\n"
         "🚀 Работаю 24/7 на PythonAnywhere!\n"
-        "🎮 12 рангов курильщиков от новичка до божества!"
+        "👒 12 рангов шляпы от новичка до божества!"
     )
     await update.message.reply_text(welcome_text)
+
+async def dick_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /dick - отрастить шляпу"""
+    user_id = str(update.effective_user.id)
+    user_name = update.effective_user.first_name
+    
+    stats = load_dick_stats()
+    
+    # Проверяем может ли пользователь использовать команду (раз в 24 часа)
+    if user_id not in stats:
+        stats[user_id] = {
+            "name": user_name,
+            "size": 0,
+            "last_grow": None,
+            "failed_attempts": 0,
+            "history": []
+        }
+    
+    user_stats = stats[user_id]
+    now = datetime.now()
+    
+    # Проверяем последний раз использования (24 часа)
+    if user_stats["last_grow"]:
+        last_grow_time = datetime.fromisoformat(user_stats["last_grow"])
+        time_diff = now - last_grow_time
+        
+        if time_diff.total_seconds() < 86400:  # 24 часа
+            hours_left = (86400 - time_diff.total_seconds()) / 3600
+            await update.message.reply_text(
+                f"⏳ {user_name}, вы уже растили шляпу сегодня!\n"
+                f"Приходите через {int(hours_left)} часов {int((hours_left % 1) * 60)} минут 🕐"
+            )
+            return
+    
+    # Рандомное изменение размера (от -10 до +10)
+    change = random.randint(-10, 10)
+    
+    # Штраф за неудачные попытки кражи
+    theft_penalty = random.randint(1, 5) if user_stats["failed_attempts"] > 0 else 0
+    if theft_penalty > 0:
+        change -= theft_penalty
+        user_stats["failed_attempts"] = 0
+    
+    user_stats["size"] += change
+    user_stats["size"] = max(0, user_stats["size"])  # Не может быть ниже 0
+    user_stats["last_grow"] = now.isoformat()
+    user_stats["history"].append({
+        "date": now.isoformat(),
+        "change": change,
+        "total": user_stats["size"]
+    })
+    
+    save_dick_stats(stats)
+    
+    # Формируем ответ
+    size_description = get_dick_size_text(user_stats["size"])
+    encouragement = get_dick_encouragement(change)
+    
+    response = f"👒 **{user_name}, вы растили шляпу!**\n\n"
+    
+    if change > 0:
+        response += f"➕ Размер вырос на {change} см! 📈\n"
+    elif change < 0:
+        response += f"➖ Размер уменьшился на {abs(change)} см 📉\n"
+        if theft_penalty > 0:
+            response += f"(Штраф за попытку кражи: -{theft_penalty} см)\n"
+    else:
+        response += f"➡️ Размер не изменился 🤷\n"
+    
+    response += f"\n**Ваш размер шляпы: {user_stats['size']} см** 👒\n"
+    response += f"{size_description}\n\n"
+    response += f"_{encouragement}_\n\n"
+    response += f"⏰ Следующее растение через 24 часа!"
+    
+    await update.message.reply_text(response, parse_mode='Markdown')
+
+async def stealdick_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /stealdick @юзер - украсть см шляпы"""
+    user_id = str(update.effective_user.id)
+    user_name = update.effective_user.first_name
+    
+    # Проверяем есть ли упоминание
+    if not update.message.reply_to_message and not context.args:
+        await update.message.reply_text(
+            "❌ Нужно ответить на сообщение юзера или указать его:\n"
+            "/stealdick @юзер"
+        )
+        return
+    
+    # Получаем ID жертвы
+    victim_id = None
+    victim_name = None
+    
+    if update.message.reply_to_message:
+        victim_id = str(update.message.reply_to_message.from_user.id)
+        victim_name = update.message.reply_to_message.from_user.first_name
+    elif context.args:
+        # Пытаемся найти по упоминанию (упрощенно)
+        await update.message.reply_text(
+            "⚠️ К сожалению, упоминания не поддерживаются. "
+            "Ответьте на сообщение жертвы командой /stealdick"
+        )
+        return
+    
+    if not victim_id or victim_id == user_id:
+        await update.message.reply_text("❌ Нельзя красть у себя! 😏")
+        return
+    
+    stats = load_dick_stats()
+    
+    # Инициализируем статы если нет
+    if user_id not in stats:
+        stats[user_id] = {
+            "name": user_name,
+            "size": 0,
+            "last_grow": None,
+            "failed_attempts": 0,
+            "history": []
+        }
+    
+    if victim_id not in stats:
+        stats[victim_id] = {
+            "name": victim_name,
+            "size": 0,
+            "last_grow": None,
+            "failed_attempts": 0,
+            "history": []
+        }
+    
+    # Вероятность успеха: 50%
+    success = random.random() > 0.5
+    
+    if success:
+        # Успешная кража: +1 до +5 см
+        steal_amount = random.randint(1, 5)
+        
+        stats[user_id]["size"] += steal_amount
+        stats[victim_id]["size"] -= steal_amount
+        stats[victim_id]["size"] = max(0, stats[victim_id]["size"])
+        
+        response = (
+            f"🔓 **{user_name} успешно украл {steal_amount} см** у {victim_name}!\n\n"
+            f"🎯 {user_name}: +{steal_amount} см (теперь {stats[user_id]['size']} см)\n"
+            f"😭 {victim_name}: -{steal_amount} см (теперь {stats[victim_id]['size']} см)\n\n"
+            f"🏆 Вор побеждает!"
+        )
+    else:
+        # Провал кражи: -1 до -5 см вору
+        penalty = random.randint(1, 5)
+        
+        stats[user_id]["size"] -= penalty
+        stats[user_id]["size"] = max(0, stats[user_id]["size"])
+        stats[user_id]["failed_attempts"] += 1
+        
+        response = (
+            f"❌ **{user_name} попытался украсть, но потерпел неудачу!**\n\n"
+            f"Вы перестарались, или так хотели украсть чужие сантиметры "
+            f"что потеряли свои! Будьте бдительны в следующий раз!\n\n"
+            f"📉 {user_name}: -{penalty} см (теперь {stats[user_id]['size']} см)\n"
+            f"😄 {victim_name}: остался при своем {stats[victim_id]['size']} см\n\n"
+            f"⚠️ Штраф сохраняется до следующего растения!"
+        )
+    
+    save_dick_stats(stats)
+    await update.message.reply_text(response, parse_mode='Markdown')
+
+async def dickplaces_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /dickplaces - топ по размеру шляпы"""
+    stats = load_dick_stats()
+    
+    if not stats:
+        await update.message.reply_text("📊 Статистика пуста. Используйте /dick!")
+        return
+    
+    # Сортируем по размеру
+    sorted_users = sorted(stats.items(), key=lambda x: x[1]["size"], reverse=True)
+    
+    message = "👑 **ТОП ШЛЯПИСТОВ**\n\n"
+    
+    medals = ["🥇", "🥈", "🥉"]
+    
+    for i, (user_id, data) in enumerate(sorted_users[:10]):
+        medal = medals[i] if i < len(medals) else f"{i+1}️⃣"
+        size_desc = get_dick_size_text(data["size"])
+        
+        message += f"{medal} **{data['name']}** - {data['size']} см {size_desc}\n"
+    
+    await update.message.reply_text(message, parse_mode='Markdown')
+
+async def dickmini_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /dickmini - мини игра на см"""
+    user_id = str(update.effective_user.id)
+    user_name = update.effective_user.first_name
+    
+    stats = load_dick_stats()
+    
+    if user_id not in stats:
+        stats[user_id] = {
+            "name": user_name,
+            "size": 0,
+            "last_grow": None,
+            "failed_attempts": 0,
+            "history": []
+        }
+    
+    user_size = stats[user_id]["size"]
+    
+    if user_size == 0:
+        await update.message.reply_text(
+            "❌ У вас нет шляпы! Сначала используйте /dick чтобы отрастить! 👒"
+        )
+        return
+    
+    # Мини игра: рулетка шляпы
+    games = [
+        {
+            "name": "🎰 Рулетка Шляпы",
+            "description": "Рискните половиной вашей шляпы чтобы удвоить её!",
+            "play": lambda size: (size * 2, "🎉 ВЫ ВЫИГРАЛИ! Шляпа удвоилась!") if random.random() > 0.5 else (0, "💔 Вы потеряли всю шляпу...")
+        },
+        {
+            "name": "🎲 Кубик Судьбы",
+            "description": "Бросьте кубик! 1-3: потеряете 20%, 4-5: ничего, 6: +50%",
+            "play": lambda size: _play_dice(size)
+        },
+        {
+            "name": "🏆 Дуэль Шляп",
+            "description": "Выиграйте ставку и получите бонус!",
+            "play": lambda size: (int(size * 1.5), "⚔️ Вы победили! +50% к шляпе!") if random.random() > 0.4 else (int(size * 0.5), "😢 Вы проиграли дуэль, -50% шляпы")
+        }
+    ]
+    
+    game = random.choice(games)
+    new_size, result = game["play"](user_size)
+    
+    stats[user_id]["size"] = new_size
+    save_dick_stats(stats)
+    
+    message = f"🎮 **{game['name']}**\n\n"
+    message += f"📝 {game['description']}\n\n"
+    message += f"{result}\n\n"
+    message += f"Было: {user_size} см\n"
+    message += f"Стало: {new_size} см\n"
+    message += f"{get_dick_size_text(new_size)}"
+    
+    await update.message.reply_text(message, parse_mode='Markdown')
+
+def _play_dice(size):
+    """Логика игры с кубиком"""
+    roll = random.randint(1, 6)
+    
+    if roll <= 3:
+        new_size = int(size * 0.8)
+        return new_size, f"🎲 Выпало {roll} - потеряли 20%! 😢"
+    elif roll <= 5:
+        return size, f"🎲 Выпало {roll} - ничего не изменилось! 🤷"
+    else:  # 6
+        new_size = int(size * 1.5)
+        return new_size, f"🎲 Выпало {roll} - ЧУДО! +50%! 🎉"
 
 async def light_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /svet"""
@@ -386,17 +715,22 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /help"""
     help_text = (
         "🤖 **СветБот на PythonAnywhere - Справка**\n\n"
-        "📋 **Команды:**\n"
-        "/svet - статус света в Киеве ⚡\n"
-        "/smoke - покурить с анимацией 🌿💨\n"
-        "/smokers - рейтинг курильщиков 🏆\n"
-        "/status - статус бота 📊\n"
-        "/help - эта справка 📖\n\n"
-        "🏠 **Адрес:** Киев, вул. Гміри Бориса 14-А\n"
-        "🔢 **Очередь:** 1.1\n"
-        "🚀 **Платформа:** PythonAnywhere 24/7\n"
-        "🎮 **Рейтинг:** 12 уровней курильщиков!\n\n"
-        "✨ Работаю круглосуточно в облаке!"
+        "⚡ **Электричество:**\n"
+        "/svet - статус света в Киеве\n\n"
+        "🌿 **Курильщики:**\n"
+        "/smoke - покурить с анимацией\n"
+        "/smokers - рейтинг курильщиков\n\n"
+        "👒 **Шляпа (Dick):**\n"
+        "/dick - отрастить шляпу (раз в 24ч)\n"
+        "/stealdick - ответить на сообщение, чтобы украсть см\n"
+        "/dickplaces - топ по размеру шляпы\n"
+        "/dickmini - мини игра на см\n\n"
+        "📊 **Информация:**\n"
+        "/status - статус бота\n"
+        "/help - эта справка\n\n"
+        "🏆 **Всего команд:** 12\n"
+        "🎮 **Игр:** 3 (smoke, stealdick, dickmini)\n"
+        "✨ **Работаю 24/7 на PythonAnywhere!**"
     )
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
@@ -414,6 +748,10 @@ def main():
     application.add_handler(CommandHandler("svet", light_command))
     application.add_handler(CommandHandler("smoke", smoke_command))
     application.add_handler(CommandHandler("smokers", smokers_command))
+    application.add_handler(CommandHandler("dick", dick_command))
+    application.add_handler(CommandHandler("stealdick", stealdick_command))
+    application.add_handler(CommandHandler("dickplaces", dickplaces_command))
+    application.add_handler(CommandHandler("dickmini", dickmini_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("help", help_command))
     
