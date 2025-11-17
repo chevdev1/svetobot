@@ -65,52 +65,157 @@ def get_smoke_rank(count):
 class EnergyParser:
     def __init__(self):
         self.last_status = None
+        self.schedule_cache = {}  # Кэш расписания
         
     def parse_power_status(self):
-        """Парсит статус электричества или возвращает тестовые данные"""
+        """Парсит статус электричества и расписание"""
         try:
             # Пытаемся получить данные с сайта
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
             }
-            response = requests.get(Config.SITE_URL, headers=headers, timeout=10)
+            response = requests.get(Config.SITE_URL, headers=headers, timeout=15)
             
             if response.status_code == 200:
+                # Парсим график с сайта
                 soup = BeautifulSoup(response.text, 'html.parser')
-                text_content = soup.get_text().lower()
+                text_content = soup.get_text()
                 
-                has_power = 'має бути вимкнена' not in text_content
+                # Ищем блоки с расписанием (формат: З 02:30 по 06:30)
+                schedule = self._parse_schedule(text_content)
+                
+                # Определяем текущий статус
+                has_power = self._check_current_power(schedule)
                 
                 return {
                     "has_power": has_power,
+                    "schedule": schedule,
                     "queue": "1.1",
                     "update_time": datetime.now().strftime("%H:%M %d.%m.%Y"),
-                    "source": "energy-ua.info"
+                    "source": "energy-ua.info",
+                    "is_fallback": False
                 }
             else:
-                raise Exception("Site unavailable")
+                raise Exception(f"Site returned {response.status_code}")
                 
         except Exception as e:
-            logger.warning(f"Using fallback data: {e}")
+            logger.warning(f"Парсинг сайта не удался: {e}")
             return self._get_fallback_data()
     
+    def _parse_schedule(self, text):
+        """Парсит расписание отключений из текста сайта"""
+        import re
+        schedule = []
+        
+        # Ищем все временные диапазоны в формате XX:XX-XX:XX или XX:XX по XX:XX
+        try:
+            for match in re.finditer(r'(\d{2}):(\d{2})[^\d]*?(\d{2}):(\d{2})', text):
+                start_hour = int(match.group(1))
+                start_min = int(match.group(2))
+                end_hour = int(match.group(3))
+                end_min = int(match.group(4))
+                
+                # Проверяем валидность времени
+                if 0 <= start_hour <= 23 and 0 <= start_min <= 59 and \
+                   0 <= end_hour <= 23 and 0 <= end_min <= 59:
+                    
+                    start_time = f"{start_hour:02d}:{start_min:02d}"
+                    end_time = f"{end_hour:02d}:{end_min:02d}"
+                    
+                    # Проверяем что это разные времена
+                    if start_time != end_time:
+                        outage = {
+                            "start": start_time,
+                            "end": end_time,
+                            "duration": self._calc_duration(start_hour, start_min, end_hour, end_min)
+                        }
+                        
+                        # Избегаем дубликатов
+                        if outage not in schedule:
+                            schedule.append(outage)
+        except Exception as e:
+            logger.warning(f"Ошибка парсинга расписания: {e}")
+        
+        # Если ничего не нашли, используем стандартное расписание
+        if not schedule:
+            schedule = [
+                {"start": "02:30", "end": "06:30", "duration": "4ч"},
+                {"start": "13:00", "end": "17:00", "duration": "4ч"}
+            ]
+        
+        # Сортируем по времени
+        schedule.sort(key=lambda x: int(x["start"].split(":")[0]) * 60 + int(x["start"].split(":")[1]))
+        
+        return schedule
+    
+    def _calc_duration(self, start_h, start_m, end_h, end_m):
+        """Считает длительность отключения"""
+        start_mins = start_h * 60 + start_m
+        end_mins = end_h * 60 + end_m
+        
+        if end_mins <= start_mins:  # Переход через полночь
+            end_mins += 24 * 60
+        
+        duration = end_mins - start_mins
+        hours = duration // 60
+        minutes = duration % 60
+        
+        if minutes == 0:
+            return f"{hours}ч"
+        else:
+            return f"{hours}ч {minutes}м"
+    
+    def _check_current_power(self, schedule):
+        """Проверяет есть ли свет сейчас"""
+        now = datetime.now()
+        current_mins = now.hour * 60 + now.minute
+        
+        for outage in schedule:
+            start_h, start_m = map(int, outage["start"].split(":"))
+            end_h, end_m = map(int, outage["end"].split(":"))
+            
+            start_mins = start_h * 60 + start_m
+            end_mins = end_h * 60 + end_m
+            
+            # Если диапазон пересекает полночь (например 23:00-02:00)
+            if end_mins <= start_mins:
+                end_mins += 24 * 60
+            
+            if start_mins <= current_mins < end_mins:
+                return False  # Свет отключен
+        
+        return True  # Свет есть
+    
     def _get_fallback_data(self):
-        """Возвращает тестовые данные"""
+        """Возвращает стандартные данные"""
         current_time = datetime.now()
-        current_hour = current_time.hour
+        current_mins = current_time.hour * 60 + current_time.minute
         
-        # Логика отключений: 02:30-06:30 и 13:00-17:00
-        is_night_outage = (current_hour >= 2 and current_hour < 6) or (current_hour == 6 and current_time.minute < 30)
-        is_day_outage = 13 <= current_hour < 17
+        # Стандартное расписание Киева
+        schedule = [
+            {"start": "02:30", "end": "06:30", "duration": "4ч"},
+            {"start": "13:00", "end": "17:00", "duration": "4ч"}
+        ]
         
-        has_power = not (is_night_outage or is_day_outage)
+        has_power = True
+        for outage in schedule:
+            start_h, start_m = map(int, outage["start"].split(":"))
+            end_h, end_m = map(int, outage["end"].split(":"))
+            
+            start_mins = start_h * 60 + start_m
+            end_mins = end_h * 60 + end_m
+            
+            if start_mins <= current_mins < end_mins:
+                has_power = False
+                break
         
         return {
             "has_power": has_power,
-            "today_periods": ["02:30-06:30", "13:00-17:00"],
+            "schedule": schedule,
             "queue": "1.1",
             "update_time": current_time.strftime("%H:%M %d.%m.%Y"),
-            "source": "PythonAnywhere тестовые данные",
+            "source": "Стандартное расписание (сайт недоступен)",
             "is_fallback": True
         }
 
@@ -817,76 +922,136 @@ async def startgame_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def light_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /svet"""
     status = energy_parser.parse_power_status()
+    schedule = status.get("schedule", [])
     
     if status["has_power"]:
         emoji = "🟢"
         status_text = "РАБОТАЕТ"
         
-        # Определяем следующее отключение
-        current_time = datetime.now()
-        current_hour = current_time.hour
+        # Ищем следующее отключение
+        now = datetime.now()
+        current_mins = now.hour * 60 + now.minute
+        next_outage = None
         
-        if current_hour < 2 or (current_hour == 2 and current_time.minute < 30):
-            next_outage = "02:30-06:30"
-        elif current_hour < 13:
-            next_outage = "13:00-17:00"
+        for outage in schedule:
+            start_h, start_m = map(int, outage["start"].split(":"))
+            start_mins = start_h * 60 + start_m
+            
+            if start_mins > current_mins:
+                next_outage = f"{outage['start']}-{outage['end']}"
+                break
+        
+        if not next_outage and schedule:
+            # Если нет отключений сегодня, то завтра первое
+            next_outage = f"завтра {schedule[0]['start']}-{schedule[0]['end']}"
+        
+        message = f"{emoji} Свет {status_text}\n"
+        if next_outage:
+            message += f"⏰ Следующее отключение: {next_outage}"
         else:
-            next_outage = "завтра 02:30-06:30"
-        
-        message = f"{emoji} Свет {status_text}\n⏰ Следующее отключение: {next_outage}"
+            message += f"✨ Отключений не планируется"
     else:
         emoji = "🔴"
         status_text = "НЕ РАБОТАЕТ"
         
         # Вычисляем время до включения
-        current_time = datetime.now()
-        current_hour = current_time.hour
+        now = datetime.now()
+        current_mins = now.hour * 60 + now.minute
+        time_left = None
         
-        if 2 <= current_hour < 6 or (current_hour == 6 and current_time.minute < 30):
-            # Отключение до 6:30
-            target_time = current_time.replace(hour=6, minute=30, second=0, microsecond=0)
-            if current_hour >= 6:
-                target_time = target_time
-        else:  # 13-17 часов
-            # Отключение до 17:00
-            target_time = current_time.replace(hour=17, minute=0, second=0, microsecond=0)
+        for outage in schedule:
+            end_h, end_m = map(int, outage["end"].split(":"))
+            start_h, start_m = map(int, outage["start"].split(":"))
+            
+            start_mins = start_h * 60 + start_m
+            end_mins = end_h * 60 + end_m
+            
+            # Проверяем через полночь
+            if end_mins <= start_mins:
+                end_mins += 24 * 60
+            
+            if start_mins <= current_mins < end_mins:
+                # Находим время до конца отключения
+                time_diff = end_mins - current_mins
+                if end_mins > 24 * 60:  # Прошло через полночь
+                    time_diff = (24 * 60 - current_mins) + (end_mins - 24 * 60)
+                
+                hours = time_diff // 60
+                minutes = time_diff % 60
+                
+                if hours > 0:
+                    time_left = f"{hours}ч {minutes}м"
+                else:
+                    time_left = f"{minutes}м"
+                break
         
-        time_diff = target_time - current_time
-        total_minutes = int(time_diff.total_seconds() // 60)
-        hours_left = total_minutes // 60
-        minutes_left = total_minutes % 60
-        
-        if hours_left > 0:
-            time_left = f"{hours_left}ч {minutes_left}м"
+        message = f"{emoji} Свет {status_text}\n"
+        if time_left:
+            message += f"⏳ До включения: {time_left}"
         else:
-            time_left = f"{minutes_left}м"
-        
-        message = f"{emoji} Свет {status_text}\n⏳ До включения: {time_left}"
+            message += f"❓ Время включения не определено"
     
     # Добавляем расписание на день
-    message += f"\n\n📅 **Расписание на сегодня:**\n"
+    message += f"\n\n📅 **Расписание на сегодня ({status['source']}):**\n"
     
-    # Создаем полное расписание дня
-    day_schedule = [
-        ("00:00-02:30", "🟢 Свет есть"),
-        ("02:30-06:30", "🔴 Отключение"), 
-        ("06:30-13:00", "🟢 Свет есть"),
-        ("13:00-17:00", "🔴 Отключение"),
-        ("17:00-24:00", "🟢 Свет есть")
-    ]
-    
-    current_time = datetime.now()
-    current_period = f"{current_time.hour:02d}:{current_time.minute:02d}"
-    
-    for time_range, description in day_schedule:
-        start_time = time_range.split('-')[0]
-        end_time = time_range.split('-')[1]
+    if schedule:
+        now = datetime.now()
+        current_mins = now.hour * 60 + now.minute
         
-        # Отмечаем текущий период
-        if _is_current_time_in_range(current_period, start_time, end_time):
-            message += f"➤ **{time_range}** - {description}\n"
-        else:
-            message += f"   {time_range} - {description}\n"
+        # Показываем период "свет есть" перед первым отключением
+        if schedule:
+            first_start_h, first_start_m = map(int, schedule[0]["start"].split(":"))
+            first_start_mins = first_start_h * 60 + first_start_m
+            
+            if current_mins < first_start_mins:
+                duration = first_start_mins - current_mins
+                hours = duration // 60
+                minutes = duration % 60
+                message += f"🟢 00:00-{schedule[0]['start']} - Свет есть\n"
+        
+        # Показываем отключения
+        for i, outage in enumerate(schedule):
+            start = outage["start"]
+            end = outage["end"]
+            
+            start_h, start_m = map(int, start.split(":"))
+            end_h, end_m = map(int, end.split(":"))
+            
+            start_mins = start_h * 60 + start_m
+            end_mins = end_h * 60 + end_m
+            
+            # Проверяем в текущем периоде
+            if end_mins <= start_mins:
+                end_mins += 24 * 60
+            
+            is_current = start_mins <= current_mins < end_mins
+            
+            if is_current:
+                message += f"➤ **{start}-{end}** - 🔴 Отключение ({outage['duration']})\n"
+            else:
+                message += f"   {start}-{end} - 🔴 Отключение ({outage['duration']})\n"
+            
+            # Добавляем период "свет есть" после отключения
+            if i < len(schedule) - 1:
+                next_start_h, next_start_m = map(int, schedule[i+1]["start"].split(":"))
+                next_start_mins = next_start_h * 60 + next_start_m
+                
+                is_current_period = end_mins <= current_mins < next_start_mins
+                
+                if is_current_period:
+                    message += f"➤ **{end}-{schedule[i+1]['start']}** - 🟢 Свет есть\n"
+                else:
+                    message += f"   {end}-{schedule[i+1]['start']} - 🟢 Свет есть\n"
+            else:
+                # После последнего отключения до полночи
+                is_current_period = end_mins <= current_mins < 24 * 60
+                
+                if is_current_period:
+                    message += f"➤ **{end}-24:00** - 🟢 Свет есть\n"
+                else:
+                    message += f"   {end}-24:00 - 🟢 Свет есть\n"
+    else:
+        message += "📢 Нет плановых отключений"
     
     await update.message.reply_text(message, parse_mode='Markdown')
 
