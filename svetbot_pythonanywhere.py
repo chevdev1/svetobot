@@ -15,8 +15,8 @@ from bs4 import BeautifulSoup
 import time
 import random
 
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
 # Настройка логирования
 logging.basicConfig(
@@ -66,9 +66,17 @@ class EnergyParser:
     def __init__(self):
         self.last_status = None
         self.schedule_cache = {}  # Кэш расписания
+        self.cache_time = None  # Время кэширования
         
     def parse_power_status(self):
         """Парсит статус электричества и расписание"""
+        # Очищаем кэш каждые 10 минут
+        if self.cache_time:
+            cache_age = (datetime.now() - self.cache_time).total_seconds()
+            if cache_age > 600:  # 10 минут
+                self.schedule_cache = {}
+                self.cache_time = None
+        
         try:
             # Пытаемся получить данные с сайта
             headers = {
@@ -82,12 +90,13 @@ class EnergyParser:
                 soup = BeautifulSoup(response.text, 'html.parser')
                 text_content = soup.get_text()
                 
-                # Ищем блоки с расписанием (формат: З 02:30 по 06:30)
+                # Ищем блоки с расписанием (формат: З 02:30 по 06:30 или 07:00-09:30)
                 schedule = self._parse_schedule(text_content)
                 
                 # Определяем текущий статус
                 has_power = self._check_current_power(schedule)
                 
+                self.cache_time = datetime.now()
                 return {
                     "has_power": has_power,
                     "schedule": schedule,
@@ -108,32 +117,54 @@ class EnergyParser:
         import re
         schedule = []
         
-        # Ищем все временные диапазоны в формате XX:XX-XX:XX или XX:XX по XX:XX
+        # Ищем все временные диапазоны в форматах:
+        # XX:XX-XX:XX или XX:XX по XX:XX или З XX:XX по XX:XX
         try:
-            for match in re.finditer(r'(\d{2}):(\d{2})[^\d]*?(\d{2}):(\d{2})', text):
+            # Паттерн 1: XX:XX-XX:XX (простая форма)
+            for match in re.finditer(r'(\d{2}):(\d{2})\s*-\s*(\d{2}):(\d{2})', text):
                 start_hour = int(match.group(1))
                 start_min = int(match.group(2))
                 end_hour = int(match.group(3))
                 end_min = int(match.group(4))
                 
-                # Проверяем валидность времени
                 if 0 <= start_hour <= 23 and 0 <= start_min <= 59 and \
-                   0 <= end_hour <= 23 and 0 <= end_min <= 59:
+                   0 <= end_hour <= 23 and 0 <= end_min <= 59 and \
+                   (start_hour * 60 + start_min) != (end_hour * 60 + end_min):
                     
                     start_time = f"{start_hour:02d}:{start_min:02d}"
                     end_time = f"{end_hour:02d}:{end_min:02d}"
                     
-                    # Проверяем что это разные времена
-                    if start_time != end_time:
-                        outage = {
-                            "start": start_time,
-                            "end": end_time,
-                            "duration": self._calc_duration(start_hour, start_min, end_hour, end_min)
-                        }
-                        
-                        # Избегаем дубликатов
-                        if outage not in schedule:
-                            schedule.append(outage)
+                    outage = {
+                        "start": start_time,
+                        "end": end_time,
+                        "duration": self._calc_duration(start_hour, start_min, end_hour, end_min)
+                    }
+                    
+                    if outage not in schedule:
+                        schedule.append(outage)
+            
+            # Паттерн 2: по XX:XX (контекстный поиск)
+            for match in re.finditer(r'(?:З|з|из|по|с|від|з)\s+(\d{2}):(\d{2})\s+(?:по|до|по|по)\s+(\d{2}):(\d{2})', text):
+                start_hour = int(match.group(1))
+                start_min = int(match.group(2))
+                end_hour = int(match.group(3))
+                end_min = int(match.group(4))
+                
+                if 0 <= start_hour <= 23 and 0 <= start_min <= 59 and \
+                   0 <= end_hour <= 23 and 0 <= end_min <= 59 and \
+                   (start_hour * 60 + start_min) != (end_hour * 60 + end_min):
+                    
+                    start_time = f"{start_hour:02d}:{start_min:02d}"
+                    end_time = f"{end_hour:02d}:{end_min:02d}"
+                    
+                    outage = {
+                        "start": start_time,
+                        "end": end_time,
+                        "duration": self._calc_duration(start_hour, start_min, end_hour, end_min)
+                    }
+                    
+                    if outage not in schedule:
+                        schedule.append(outage)
         except Exception as e:
             logger.warning(f"Ошибка парсинга расписания: {e}")
         
@@ -143,6 +174,9 @@ class EnergyParser:
                 {"start": "02:30", "end": "06:30", "duration": "4ч"},
                 {"start": "13:00", "end": "17:00", "duration": "4ч"}
             ]
+            logger.info(f"Используется стандартное расписание (не найдены новые времена на сайте)")
+        else:
+            logger.info(f"Найдено расписание с сайта: {schedule}")
         
         # Сортируем по времени
         schedule.sort(key=lambda x: int(x["start"].split(":")[0]) * 60 + int(x["start"].split(":")[1]))
@@ -349,21 +383,22 @@ async def dick_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_stats = stats[user_id]
     now = datetime.now()
     
-    # Проверяем последний раз использования (24 часа)
+    # Проверяем последний раз использования (12 часов - 2 раза в день!)
     if user_stats["last_grow"]:
         last_grow_time = datetime.fromisoformat(user_stats["last_grow"])
         time_diff = now - last_grow_time
         
-        if time_diff.total_seconds() < 86400:  # 24 часа
-            hours_left = (86400 - time_diff.total_seconds()) / 3600
+        if time_diff.total_seconds() < 43200:  # 12 часов = 2 раза в день!
+            hours_left = (43200 - time_diff.total_seconds()) / 3600
             await update.message.reply_text(
-                f"⏳ {user_name}, вы уже растили шляпу сегодня!\n"
-                f"Приходите через {int(hours_left)} часов {int((hours_left % 1) * 60)} минут 🕐"
+                f"⏳ {user_name}, вы уже растили шляпу недавно!\n"
+                f"Приходите через {int(hours_left)} часов {int((hours_left % 1) * 60)} минут 🕐\n"
+                f"✨ Помните: 2 раза в день максимум!"
             )
             return
     
-    # Рандомное изменение размера (от -10 до +10)
-    change = random.randint(-10, 10)
+    # Рандомное изменение размера (от -20 до +20) - ПОВЫШЕНО!
+    change = random.randint(-20, 20)
     
     # Штраф за неудачные попытки кражи
     theft_penalty = random.randint(1, 5) if user_stats["failed_attempts"] > 0 else 0
@@ -442,6 +477,34 @@ async def stealdick_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Нельзя красть у себя! 😏")
         return
     
+    # ЗАЩИТА: Нельзя красть у бота!
+    if victim_id == "6965186629":  # ID бота
+        penalty = random.randint(1, 5)
+        stats = load_dick_stats()
+        if user_id not in stats:
+            stats[user_id] = {
+                "name": user_name,
+                "size": 0,
+                "last_grow": None,
+                "failed_attempts": 0,
+                "history": []
+            }
+        
+        stats[user_id]["size"] -= penalty
+        stats[user_id]["size"] = max(0, stats[user_id]["size"])
+        
+        response = (
+            f"⚠️ **ОСТОРОЖНО!** Вы попытались украсть у самого бота!\n\n"
+            f"🤖 СветБот недоступен для воровства - это святое!\n"
+            f"📉 Штраф за дерзость: -{penalty} см\n\n"
+            f"Теперь у вас: {stats[user_id]['size']} см\n"
+            f"⚡ В следующий раз будьте умнее!"
+        )
+        
+        save_dick_stats(stats)
+        await update.message.reply_text(response, parse_mode='Markdown')
+        return
+    
     stats = load_dick_stats()
     
     # Инициализируем статы если нет
@@ -451,8 +514,13 @@ async def stealdick_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "size": 0,
             "last_grow": None,
             "failed_attempts": 0,
-            "history": []
+            "history": [],
+            "steal_attempts": []  # Отслеживание попыток кражи
         }
+    
+    # Добавляем поле если его нет (для старых пользователей)
+    if "steal_attempts" not in stats[user_id]:
+        stats[user_id]["steal_attempts"] = []
     
     if victim_id not in stats:
         stats[victim_id] = {
@@ -460,8 +528,32 @@ async def stealdick_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "size": 0,
             "last_grow": None,
             "failed_attempts": 0,
-            "history": []
+            "history": [],
+            "steal_attempts": []
         }
+    
+    # НОВОЕ: Проверяем лимит кражи (максимум 3 раза в день)
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    
+    # Чистим старые записи (старше сегодня)
+    stats[user_id]["steal_attempts"] = [
+        date for date in stats[user_id]["steal_attempts"] 
+        if date == today
+    ]
+    
+    if len(stats[user_id]["steal_attempts"]) >= 3:
+        remaining = 3 - len(stats[user_id]["steal_attempts"])
+        await update.message.reply_text(
+            f"❌ **Лимит использован!**\n\n"
+            f"🔓 Вы можете красть максимум **3 раза в день**\n"
+            f"Сегодня вы уже использовали все попытки!\n\n"
+            f"⏰ Приходите завтра, охотник!"
+        )
+        return
+    
+    # Добавляем попытку
+    stats[user_id]["steal_attempts"].append(today)
     
     # Вероятность успеха: 50%
     success = random.random() > 0.5
@@ -529,7 +621,7 @@ async def dickplaces_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(message, parse_mode='Markdown')
 
 async def dickmini_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /dickmini - мини игра на см"""
+    """Команда /dickmini - мини игра на см с лобби"""
     user_id = str(update.effective_user.id)
     user_name = update.effective_user.first_name
     
@@ -541,7 +633,8 @@ async def dickmini_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "size": 0,
             "last_grow": None,
             "failed_attempts": 0,
-            "history": []
+            "history": [],
+            "steal_attempts": []
         }
     
     user_size = stats[user_id]["size"]
@@ -552,39 +645,160 @@ async def dickmini_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Мини игра: рулетка шляпы
-    games = [
-        {
-            "name": "🎰 Рулетка Шляпы",
-            "description": "Рискните половиной вашей шляпы чтобы удвоить её!",
-            "play": lambda size: (size * 2, "🎉 ВЫ ВЫИГРАЛИ! Шляпа удвоилась!") if random.random() > 0.5 else (0, "💔 Вы потеряли всю шляпу...")
-        },
-        {
-            "name": "🎲 Кубик Судьбы",
-            "description": "Бросьте кубик! 1-3: потеряете 20%, 4-5: ничего, 6: +50%",
-            "play": lambda size: _play_dice(size)
-        },
-        {
-            "name": "🏆 Дуэль Шляп",
-            "description": "Выиграйте ставку и получите бонус!",
-            "play": lambda size: (int(size * 1.5), "⚔️ Вы победили! +50% к шляпе!") if random.random() > 0.4 else (int(size * 0.5), "😢 Вы проиграли дуэль, -50% шляпы")
-        }
+    # Создаем лобби для игры
+    lobby_id = f"mini_{user_id}_{int(datetime.now().timestamp())}"
+    game_lobbies[lobby_id] = {
+        "type": "dickmini",
+        "creator": user_id,
+        "creator_name": user_name,
+        "players": {user_id: {"name": user_name, "rolls": []}},
+        "status": "waiting",
+        "chat_id": str(update.effective_chat.id)
+    }
+    
+    # Кнопки выбора игры
+    keyboard = [
+        [
+            InlineKeyboardButton("🎰 Рулетка", callback_data=f"game_roulette_{lobby_id}"),
+            InlineKeyboardButton("🎲 Кубик", callback_data=f"game_dice_{lobby_id}")
+        ],
+        [
+            InlineKeyboardButton("⚔️ Дуэль", callback_data=f"game_duel_{lobby_id}")
+        ]
     ]
     
-    game = random.choice(games)
-    new_size, result = game["play"](user_size)
+    reply_markup = InlineKeyboardMarkup(keyboard)
     
-    stats[user_id]["size"] = new_size
+    message = (
+        f"� **МИНИ ИГРА ШЛЯПЫ**\n\n"
+        f"👤 Игрок: {user_name}\n"
+        f"👒 Ваша шляпа: {user_size} см\n\n"
+        f"Выберите игру:\n\n"
+        f"🎰 **Рулетка** - Удвой или потеряй!\n"
+        f"🎲 **Кубик** - Бросок судьбы (1-3: -20%, 4-5: ничего, 6: +50%)\n"
+        f"⚔️ **Дуэль** - Побеждай и выигрывай!"
+    )
+    
+    await update.message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def handle_game_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик нажатия на кнопки игр"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = str(update.effective_user.id)
+    user_name = update.effective_user.first_name
+    
+    data = query.data
+    
+    # Парсим callback: game_TYPE_LOBBY_ID
+    parts = data.split("_", 2)
+    if len(parts) < 3:
+        await query.edit_message_text("❌ Ошибка игры")
+        return
+    
+    game_type = parts[1]
+    lobby_id = parts[2]
+    
+    if lobby_id not in game_lobbies:
+        await query.edit_message_text("❌ Лобби не найдено")
+        return
+    
+    lobby = game_lobbies[lobby_id]
+    
+    if lobby["creator"] != user_id:
+        await query.answer("❌ Только создатель может выбрать игру!", show_alert=True)
+        return
+    
+    stats = load_dick_stats()
+    
+    if user_id not in stats:
+        stats[user_id] = {
+            "name": user_name,
+            "size": 0,
+            "last_grow": None,
+            "failed_attempts": 0,
+            "history": [],
+            "steal_attempts": []
+        }
+    
+    user_size = stats[user_id]["size"]
+    
+    # РУЛЕТКА: Удвой или потеряй
+    if game_type == "roulette":
+        success = random.random() > 0.5
+        
+        if success:
+            new_size = user_size * 2
+            result = f"🎉 **ВЫ ВЫИГРАЛИ!** 🎉\n\nШляпа удвоилась!\n{user_size} см → **{int(new_size)} см**"
+            await send_game_gif(update, "jackpot")
+        else:
+            new_size = 0
+            result = f"💔 **Вы проиграли!** 💔\n\nШляпа исчезла!\n{user_size} см → **0 см**"
+            await send_game_gif(update, "lose")
+        
+        stats[user_id]["size"] = int(new_size)
+    
+    # КУБИК СУДЬБЫ
+    elif game_type == "dice":
+        roll = random.randint(1, 6)
+        
+        dice_emojis = ["❌", "🎲", "🎲", "🎲", "🎲", "🎲", "🎲"]  # 0-6
+        
+        if roll <= 3:
+            new_size = int(user_size * 0.8)
+            result = f"🎲 **Выпало {roll}** 🎲\n\nПотеряли 20%!\n{user_size} см → **{new_size} см**"
+            await send_game_gif(update, "down")
+        elif roll <= 5:
+            new_size = user_size
+            result = f"🎲 **Выпало {roll}** 🎲\n\nНичего не изменилось!\n**Остается {new_size} см**"
+        else:  # 6
+            new_size = int(user_size * 1.5)
+            result = f"🎲 **Выпало {roll}** 🎲 🎉\n\n**ЧУДО! +50%!**\n{user_size} см → **{new_size} см**"
+            await send_game_gif(update, "win_big")
+        
+        stats[user_id]["size"] = new_size
+    
+    # ДУЭЛЬ ШЛЯП
+    elif game_type == "duel":
+        success = random.random() > 0.4  # 60% шанс выигрыша
+        
+        if success:
+            bonus = int(user_size * 0.5)
+            new_size = user_size + bonus
+            result = f"⚔️ **Вы победили в дуэли!** ⚔️\n\n+50% к шляпе!\n{user_size} см → **{new_size} см**"
+            await send_game_gif(update, "victory")
+        else:
+            loss = int(user_size * 0.5)
+            new_size = user_size - loss
+            result = f"⚔️ **Дуэль проиграна!** ⚔️\n\n-50% шляпы!\n{user_size} см → **{new_size} см**"
+            await send_game_gif(update, "sad")
+        
+        stats[user_id]["size"] = max(0, new_size)
+    
+    else:
+        await query.edit_message_text("❌ Неизвестная игра")
+        return
+    
+    # Сохраняем результаты
     save_dick_stats(stats)
     
-    message = f"🎮 **{game['name']}**\n\n"
-    message += f"📝 {game['description']}\n\n"
-    message += f"{result}\n\n"
-    message += f"Было: {user_size} см\n"
-    message += f"Стало: {new_size} см\n"
-    message += f"{get_dick_size_text(new_size)}"
+    # Формируем итоговый результат
+    final_size = stats[user_id]["size"]
+    size_desc = get_dick_size_text(final_size)
     
-    await update.message.reply_text(message, parse_mode='Markdown')
+    message = (
+        f"🎮 **РЕЗУЛЬТАТ**\n\n"
+        f"{result}\n\n"
+        f"**Текущая шляпа:** {final_size} см\n"
+        f"{size_desc}\n\n"
+        f"Спасибо за игру! 🎲"
+    )
+    
+    await query.edit_message_text(message, parse_mode='Markdown')
+    
+    # Удаляем лобби
+    del game_lobbies[lobby_id]
 
 def _play_dice(size):
     """Логика игры с кубиком"""
@@ -602,34 +816,34 @@ def _play_dice(size):
 # Система лобби для мультиплеер игр
 game_lobbies = {}
 
-# GIF для игр (популярные Giphy ссылки) с тематическими мемами
+# GIF для игр (рабочие ссылки на GIF) с тематическими мемами
 GAME_GIFS = {
     # Кубики и казино
-    "dice_start": "https://media.giphy.com/media/l0HlDtKYoYGIVwjRm/giphy.gif",
-    "dice_roll": "https://media.giphy.com/media/cKhhr7aJ0gJ4lLzR9Z/giphy.gif",
+    "dice_start": "https://c.tenor.com/I_OxyKv97HoAAAAC/dice-roll.gif",
+    "dice_roll": "https://c.tenor.com/EWeRf1awv0IAAAAC/dice-throw.gif",
     
     # Победы
-    "victory": "https://media.giphy.com/media/cKhhr7aJ0gJ4lLzR9Z/giphy.gif",
-    "win_big": "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif",
-    "jackpot": "https://media.giphy.com/media/26uf1EUQkwkARtxzG/giphy.gif",
-    "celebration": "https://media.giphy.com/media/g9GznuK7GBo1G/giphy.gif",
+    "victory": "https://c.tenor.com/5WQvjP7lJBkAAAAC/celebrate-yay.gif",
+    "win_big": "https://c.tenor.com/rDvS9K9KnwYAAAAC/fireworks-celebration.gif",
+    "jackpot": "https://c.tenor.com/f-vbtVjFcPcAAAAC/jackpot-jackpot-winner.gif",
+    "celebration": "https://c.tenor.com/fFkJQMV6M38AAAAC/party-balloons.gif",
     
     # Поражения
-    "sad": "https://media.giphy.com/media/jD4DwBtqSWYeI/giphy.gif",
-    "cry": "https://media.giphy.com/media/9RrdA3d4V67P6/giphy.gif",
-    "lose": "https://media.giphy.com/media/ISOckP7QfotLi/giphy.gif",
+    "sad": "https://c.tenor.com/rh-RbZ5vqNUAAAAC/sad.gif",
+    "cry": "https://c.tenor.com/CPfKz1-N_WUAAAAC/sad-crying.gif",
+    "lose": "https://c.tenor.com/5cZ1-gLu0NcAAAAC/lose-losing.gif",
     
     # Денежные мемы
-    "money": "https://media.giphy.com/media/xTiTnZ3LoBDr2g1pIY/giphy.gif",
-    "money_rain": "https://media.giphy.com/media/2sSvxJl8XYuI/giphy.gif",
+    "money": "https://c.tenor.com/U44SvrlBQdYAAAAC/money-rain.gif",
+    "money_rain": "https://c.tenor.com/yYF0JZp-NuoAAAAC/money-falling.gif",
     
     # Рост шляпы
-    "growth": "https://media.giphy.com/media/g9GznuK7GBo1G/giphy.gif",
-    "up": "https://media.giphy.com/media/3o6ZtpWzSKZ94IjCRi/giphy.gif",
+    "growth": "https://c.tenor.com/e3kP5Ps-s0oAAAAC/growth-up.gif",
+    "up": "https://c.tenor.com/Uwd-GbQaKrwAAAAC/arrow-up-up-arrow.gif",
     
     # Падение шляпы
-    "down": "https://media.giphy.com/media/jD4DwBtqSWYeI/giphy.gif",
-    "fall": "https://media.giphy.com/media/ZqlvCTNLe0CHi/giphy.gif"
+    "down": "https://c.tenor.com/RpnUxVhVFPkAAAAC/fall-down.gif",
+    "fall": "https://c.tenor.com/V8jDCJLUr6wAAAAC/falling-down.gif"
 }
 
 # Текстовые мемы/подписи
@@ -1257,6 +1471,9 @@ def main():
     application.add_handler(CommandHandler("startgame", startgame_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("help", help_command))
+    
+    # Обработчик для кнопок игр
+    application.add_handler(CallbackQueryHandler(handle_game_callback, pattern="^game_"))
     
     # Альтернативные команды
     application.add_handler(CommandHandler("light", light_command))
