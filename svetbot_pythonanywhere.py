@@ -483,6 +483,258 @@ def _play_dice(size):
         new_size = int(size * 1.5)
         return new_size, f"🎲 Выпало {roll} - ЧУДО! +50%! 🎉"
 
+# Система лобби для мультиплеер игр
+game_lobbies = {}
+
+# GIF для игр (популярные Giphy ссылки)
+GAME_GIFS = {
+    "dice": "https://media.giphy.com/media/l0HlDtKYoYGIVwjRm/giphy.gif",
+    "victory": "https://media.giphy.com/media/cKhhr7aJ0gJ4lLzR9Z/giphy.gif",
+    "celebration": "https://media.giphy.com/media/g9GznuK7GBo1G/giphy.gif",
+    "money": "https://media.giphy.com/media/xTiTnZ3LoBDr2g1pIY/giphy.gif",
+    "jackpot": "https://media.giphy.com/media/26uf1EUQkwkARtxzG/giphy.gif",
+    "sad": "https://media.giphy.com/media/jD4DwBtqSWYeI/giphy.gif"
+}
+
+async def send_game_gif(update: Update, gif_type: str):
+    """Отправляет GIF для игры"""
+    try:
+        gif_url = GAME_GIFS.get(gif_type, GAME_GIFS["celebration"])
+        await update.message.reply_animation(
+            animation=gif_url,
+            caption=f"🎮 {gif_type.upper()}"
+        )
+    except Exception as e:
+        logger.debug(f"GIF не отправлена: {e}")
+
+async def dicewar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /dicewar - игра в кубик на нескольких игроков"""
+    user_id = str(update.effective_user.id)
+    user_name = update.effective_user.first_name
+    chat_id = str(update.effective_chat.id)
+    
+    stats = load_dick_stats()
+    
+    if user_id not in stats:
+        await update.message.reply_text(
+            "❌ У вас нет шляпы! Используйте /dick чтобы отрастить! 👒"
+        )
+        return
+    
+    # Проверяем аргумент ставки
+    if not context.args:
+        await update.message.reply_text(
+            "📊 Используйте: /dicewar [ставка в см]\n"
+            "Пример: /dicewar 15\n"
+            "Ставка от 10 до 20 см"
+        )
+        return
+    
+    try:
+        bet = int(context.args[0])
+        if bet < 10 or bet > 20:
+            await update.message.reply_text("❌ Ставка от 10 до 20 см!")
+            return
+        
+        if stats[user_id]["size"] < bet:
+            await update.message.reply_text(
+                f"❌ У вас только {stats[user_id]['size']} см шляпы, "
+                f"а ставка {bet} см!"
+            )
+            return
+    except ValueError:
+        await update.message.reply_text("❌ Ставка должна быть числом!")
+        return
+    
+    # Создаем новое лобби
+    lobby_id = f"{chat_id}_{int(datetime.now().timestamp())}"
+    game_lobbies[lobby_id] = {
+        "creator": user_id,
+        "creator_name": user_name,
+        "bet": bet,
+        "players": {user_id: {"name": user_name, "rolls": []}},
+        "status": "waiting",
+        "max_players": 4,
+        "chat_id": chat_id,
+        "message_id": None,
+        "created_at": datetime.now()
+    }
+    
+    message_text = (
+        f"🎲 **КУБИК ВОЙНЫ**\n\n"
+        f"💰 Ставка: {bet} см\n"
+        f"👥 Игроки: 1/4\n"
+        f"👤 Создатель: {user_name}\n\n"
+        f"Нажмите кнопку чтобы присоединиться!\n"
+        f"Нужно минимум 2 игрока для начала игры"
+    )
+    
+    msg = await update.message.reply_text(
+        message_text,
+        parse_mode='Markdown'
+    )
+    
+    game_lobbies[lobby_id]["message_id"] = msg.message_id
+    
+    # Показываем инструкцию
+    await update.message.reply_text(
+        f"✅ Лобби создано! ID: `{lobby_id}`\n"
+        f"Напишите `/joindicewar {lobby_id}` чтобы присоединиться\n"
+        f"Или `/startgame {lobby_id}` когда все готовы (минимум 2 игрока)"
+    )
+
+async def joindicewar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Присоединиться к игре"""
+    user_id = str(update.effective_user.id)
+    user_name = update.effective_user.first_name
+    
+    if not context.args:
+        await update.message.reply_text("❌ Используйте: /joindicewar [ID лобби]")
+        return
+    
+    lobby_id = context.args[0]
+    
+    if lobby_id not in game_lobbies:
+        await update.message.reply_text("❌ Лобби не найдено!")
+        return
+    
+    lobby = game_lobbies[lobby_id]
+    
+    if lobby["status"] != "waiting":
+        await update.message.reply_text("❌ Игра уже началась!")
+        return
+    
+    if user_id in lobby["players"]:
+        await update.message.reply_text("❌ Вы уже в этой игре!")
+        return
+    
+    if len(lobby["players"]) >= lobby["max_players"]:
+        await update.message.reply_text("❌ Лобби переполнено!")
+        return
+    
+    # Проверяем достаточно ли см
+    stats = load_dick_stats()
+    if user_id not in stats:
+        stats[user_id] = {
+            "name": user_name,
+            "size": 0,
+            "last_grow": None,
+            "failed_attempts": 0,
+            "history": []
+        }
+    
+    if stats[user_id]["size"] < lobby["bet"]:
+        await update.message.reply_text(
+            f"❌ У вас только {stats[user_id]['size']} см, "
+            f"а ставка {lobby['bet']} см!"
+        )
+        return
+    
+    # Добавляем игрока
+    lobby["players"][user_id] = {"name": user_name, "rolls": []}
+    
+    player_list = "\n".join(
+        [f"👤 {p['name']}" for p in lobby["players"].values()]
+    )
+    
+    message_text = (
+        f"🎲 **КУБИК ВОЙНЫ**\n\n"
+        f"💰 Ставка: {lobby['bet']} см\n"
+        f"👥 Игроки: {len(lobby['players'])}/{lobby['max_players']}\n\n"
+        f"**Участники:**\n{player_list}\n\n"
+        f"Напишите `/startgame {lobby_id}` когда все готовы!"
+    )
+    
+    await update.message.reply_text(message_text, parse_mode='Markdown')
+
+async def startgame_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начать игру"""
+    user_id = str(update.effective_user.id)
+    
+    if not context.args:
+        await update.message.reply_text("❌ Используйте: /startgame [ID лобби]")
+        return
+    
+    lobby_id = context.args[0]
+    
+    if lobby_id not in game_lobbies:
+        await update.message.reply_text("❌ Лобби не найдено!")
+        return
+    
+    lobby = game_lobbies[lobby_id]
+    
+    if user_id != lobby["creator"]:
+        await update.message.reply_text("❌ Только создатель может начать игру!")
+        return
+    
+    if len(lobby["players"]) < 2:
+        await update.message.reply_text("❌ Нужно минимум 2 игрока!")
+        return
+    
+    lobby["status"] = "playing"
+    
+    # Отправляем GIF начала игры
+    await send_game_gif(update, "dice")
+    
+    # Раунд 1: каждый кидает кубик 3 раза
+    message = "🎲 **НАЧАЛО ИГРЫ!**\n\n"
+    message += f"💰 Ставка: {lobby['bet']} см\n"
+    message += f"🎯 Раунд 1: 3 броска\n\n"
+    message += "**Результаты:**\n"
+    
+    for player_id, player in lobby["players"].items():
+        rolls = [random.randint(1, 6) for _ in range(3)]
+        player["rolls"] = rolls
+        total = sum(rolls)
+        
+        message += f"👤 {player['name']}: {rolls} = {total}\n"
+    
+    # Определяем победителя
+    winner_id = max(lobby["players"].items(), key=lambda x: sum(x[1]["rolls"]))[0]
+    winner_name = lobby["players"][winner_id]["name"]
+    
+    message += f"\n🏆 **ПОБЕДИТЕЛЬ: {winner_name}!**\n"
+    message += f"💰 Выигрыш: +{lobby['bet'] * (len(lobby['players']) - 1)} см\n"
+    
+    # Отправляем GIF победы
+    await send_game_gif(update, "victory")
+    
+    # Обновляем статистику
+    stats = load_dick_stats()
+    
+    # Отнимаем ставку у всех проигравших и дарим победителю
+    total_bet = lobby["bet"] * (len(lobby["players"]) - 1)
+    
+    for player_id in lobby["players"]:
+        if player_id not in stats:
+            stats[player_id] = {
+                "name": lobby["players"][player_id]["name"],
+                "size": 0,
+                "last_grow": None,
+                "failed_attempts": 0,
+                "history": []
+            }
+        
+        if player_id == winner_id:
+            stats[player_id]["size"] += total_bet
+        else:
+            stats[player_id]["size"] -= lobby["bet"]
+            stats[player_id]["size"] = max(0, stats[player_id]["size"])
+    
+    save_dick_stats(stats)
+    
+    message += f"\n**Итоги:**\n"
+    for player_id, player in lobby["players"].items():
+        if player_id == winner_id:
+            message += f"✅ {player['name']}: +{total_bet} см\n"
+        else:
+            message += f"❌ {player['name']}: -{lobby['bet']} см\n"
+    
+    await update.message.reply_text(message, parse_mode='Markdown')
+    
+    # Удаляем лобби
+    del game_lobbies[lobby_id]
+
 async def light_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /svet"""
     status = energy_parser.parse_power_status()
@@ -725,11 +977,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/stealdick - ответить на сообщение, чтобы украсть см\n"
         "/dickplaces - топ по размеру шляпы\n"
         "/dickmini - мини игра на см\n\n"
+        "🎲 **Кубик Войны (новое!):**\n"
+        "/dicewar [10-20] - создать игру\n"
+        "/joindicewar [ID] - присоединиться\n"
+        "/startgame [ID] - начать (2-4 игрока)\n\n"
         "📊 **Информация:**\n"
         "/status - статус бота\n"
         "/help - эта справка\n\n"
-        "🏆 **Всего команд:** 12\n"
-        "🎮 **Игр:** 3 (smoke, stealdick, dickmini)\n"
+        "� **Всего команд:** 14\n"
+        "👥 **Мультиплеер:** Кубик Войны (2-4 игрока)\n"
         "✨ **Работаю 24/7 на PythonAnywhere!**"
     )
     await update.message.reply_text(help_text, parse_mode='Markdown')
@@ -752,6 +1008,9 @@ def main():
     application.add_handler(CommandHandler("stealdick", stealdick_command))
     application.add_handler(CommandHandler("dickplaces", dickplaces_command))
     application.add_handler(CommandHandler("dickmini", dickmini_command))
+    application.add_handler(CommandHandler("dicewar", dicewar_command))
+    application.add_handler(CommandHandler("joindicewar", joindicewar_command))
+    application.add_handler(CommandHandler("startgame", startgame_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("help", help_command))
     
