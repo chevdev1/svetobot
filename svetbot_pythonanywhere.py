@@ -298,6 +298,12 @@ async def dick_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response += f"⏰ Следующее растение через 24 часа!"
     
     await update.message.reply_text(response, parse_mode='Markdown')
+    
+    # Отправляем мем в зависимости от результата
+    if change > 5:
+        await send_game_gif(update, "growth")
+    elif change < -5:
+        await send_game_gif(update, "down")
 
 async def stealdick_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /stealdick @юзер - украсть см шляпы"""
@@ -369,6 +375,10 @@ async def stealdick_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"😭 {victim_name}: -{steal_amount} см (теперь {stats[victim_id]['size']} см)\n\n"
             f"🏆 Вор побеждает!"
         )
+        
+        save_dick_stats(stats)
+        await update.message.reply_text(response, parse_mode='Markdown')
+        await send_game_gif(update, "steal_success")
     else:
         # Провал кражи: -1 до -5 см вору
         penalty = random.randint(1, 5)
@@ -385,9 +395,10 @@ async def stealdick_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"😄 {victim_name}: остался при своем {stats[victim_id]['size']} см\n\n"
             f"⚠️ Штраф сохраняется до следующего растения!"
         )
-    
-    save_dick_stats(stats)
-    await update.message.reply_text(response, parse_mode='Markdown')
+        
+        save_dick_stats(stats)
+        await update.message.reply_text(response, parse_mode='Markdown')
+        await send_game_gif(update, "steal_fail")
 
 async def dickplaces_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /dickplaces - топ по размеру шляпы"""
@@ -486,24 +497,86 @@ def _play_dice(size):
 # Система лобби для мультиплеер игр
 game_lobbies = {}
 
-# GIF для игр (популярные Giphy ссылки)
+# GIF для игр (популярные Giphy ссылки) с тематическими мемами
 GAME_GIFS = {
-    "dice": "https://media.giphy.com/media/l0HlDtKYoYGIVwjRm/giphy.gif",
+    # Кубики и казино
+    "dice_start": "https://media.giphy.com/media/l0HlDtKYoYGIVwjRm/giphy.gif",
+    "dice_roll": "https://media.giphy.com/media/cKhhr7aJ0gJ4lLzR9Z/giphy.gif",
+    
+    # Победы
     "victory": "https://media.giphy.com/media/cKhhr7aJ0gJ4lLzR9Z/giphy.gif",
-    "celebration": "https://media.giphy.com/media/g9GznuK7GBo1G/giphy.gif",
-    "money": "https://media.giphy.com/media/xTiTnZ3LoBDr2g1pIY/giphy.gif",
+    "win_big": "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif",
     "jackpot": "https://media.giphy.com/media/26uf1EUQkwkARtxzG/giphy.gif",
-    "sad": "https://media.giphy.com/media/jD4DwBtqSWYeI/giphy.gif"
+    "celebration": "https://media.giphy.com/media/g9GznuK7GBo1G/giphy.gif",
+    
+    # Поражения
+    "sad": "https://media.giphy.com/media/jD4DwBtqSWYeI/giphy.gif",
+    "cry": "https://media.giphy.com/media/9RrdA3d4V67P6/giphy.gif",
+    "lose": "https://media.giphy.com/media/ISOckP7QfotLi/giphy.gif",
+    
+    # Денежные мемы
+    "money": "https://media.giphy.com/media/xTiTnZ3LoBDr2g1pIY/giphy.gif",
+    "money_rain": "https://media.giphy.com/media/2sSvxJl8XYuI/giphy.gif",
+    
+    # Рост шляпы
+    "growth": "https://media.giphy.com/media/g9GznuK7GBo1G/giphy.gif",
+    "up": "https://media.giphy.com/media/3o6ZtpWzSKZ94IjCRi/giphy.gif",
+    
+    # Падение шляпы
+    "down": "https://media.giphy.com/media/jD4DwBtqSWYeI/giphy.gif",
+    "fall": "https://media.giphy.com/media/ZqlvCTNLe0CHi/giphy.gif"
+}
+
+# Текстовые мемы/подписи
+MEME_TEXTS = {
+    "victory": [
+        "🏆 ЧЕМПИОН ВЫСТУПАЕТ! 🏆",
+        "👑 ЛЕГЕНДА РОЖДЕНА! 👑",
+        "⚡ БОГИ КУБИКОВ С ВАМИ! ⚡",
+        "🎯 ТОЧКА! РОВНО В ЦЕЛЬ! 🎯",
+        "💎 БОЖЕСТВЕННЫЙ БРОСОК! 💎"
+    ],
+    "lose": [
+        "😭 ПЕЧАЛЬКА... 😭",
+        "💔 ПОПАЛ ВАМ! 💔",
+        "🎭 ТРАГЕДИЯ! 🎭",
+        "📉 СТРЕМИТЕЛЬНОЕ ПАДЕНИЕ! 📉",
+        "😢 В СЛЕДУЮЩИЙ РАЗ! 😢"
+    ],
+    "growth": [
+        "📈 ШЛЯПА РАСТЕТ! 📈",
+        "🚀 ПОЛЕТ НА ЛУНУ! 🚀",
+        "💪 МЫШЦЫ ШЛЯПЫ РАСТУТ! 💪",
+        "✨ МАГИЧЕСКИЙ РОСТ! ✨",
+        "⬆️ ВВЕ-ЁРХ! ⬆️"
+    ],
+    "steal_success": [
+        "🔓 ВОРА ПОЙМАЛИ! 🔓",
+        "💰 ГРАБЕЖ УДАЛСЯ! 💰",
+        "😈 КОВАРНЫЙ ПЛАН! 😈",
+        "🎯 ОГРАБЛЕНИЕ ВЕКА! 🎯",
+        "⚡ ВОРОВСКОЕ МАСТЕРСТВО! ⚡"
+    ],
+    "steal_fail": [
+        "❌ ОГРАБЛЕНИЕ НЕ УДАЛОСЬ! ❌",
+        "💥 БУМЕРАНГОМ ПО МОРДЕ! 💥",
+        "😱 ПОПАЛСЯ! 😱",
+        "🚨 ОХРАНА СХВАТИЛА! 🚨",
+        "🤦 ПОЗОР И ПОЗОР! 🤦"
+    ]
 }
 
 async def send_game_gif(update: Update, gif_type: str):
-    """Отправляет GIF для игры"""
+    """Отправляет GIF для игры с тематическим мемом"""
     try:
-        gif_url = GAME_GIFS.get(gif_type, GAME_GIFS["celebration"])
-        await update.message.reply_animation(
-            animation=gif_url,
-            caption=f"🎮 {gif_type.upper()}"
-        )
+        gif_url = GAME_GIFS.get(gif_type, GAME_GIFS.get("celebration"))
+        meme = random.choice(MEME_TEXTS.get(gif_type.replace("_start", "").replace("_big", "").split("_")[0], ["🎮 СОБЫТИЕ!"]))
+        
+        if gif_url:
+            await update.message.reply_animation(
+                animation=gif_url,
+                caption=meme
+            )
     except Exception as e:
         logger.debug(f"GIF не отправлена: {e}")
 
@@ -532,8 +605,8 @@ async def dicewar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         bet = int(context.args[0])
-        if bet < 10 or bet > 20:
-            await update.message.reply_text("❌ Ставка от 10 до 20 см!")
+        if bet < 1 or bet > 100:
+            await update.message.reply_text("❌ Ставка от 1 до 100 см!")
             return
         
         if stats[user_id]["size"] < bet:
@@ -674,12 +747,13 @@ async def startgame_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lobby["status"] = "playing"
     
     # Отправляем GIF начала игры
-    await send_game_gif(update, "dice")
+    await send_game_gif(update, "dice_start")
     
     # Раунд 1: каждый кидает кубик 3 раза
     message = "🎲 **НАЧАЛО ИГРЫ!**\n\n"
     message += f"💰 Ставка: {lobby['bet']} см\n"
-    message += f"🎯 Раунд 1: 3 броска\n\n"
+    message += f"🎯 Раунд 1: 3 броска\n"
+    message += f"👥 Участников: {len(lobby['players'])}\n\n"
     message += "**Результаты:**\n"
     
     for player_id, player in lobby["players"].items():
@@ -687,18 +761,23 @@ async def startgame_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         player["rolls"] = rolls
         total = sum(rolls)
         
-        message += f"👤 {player['name']}: {rolls} = {total}\n"
+        message += f"👤 {player['name']}: {rolls} = **{total}** 🎲\n"
     
     # Определяем победителя
     winner_id = max(lobby["players"].items(), key=lambda x: sum(x[1]["rolls"]))[0]
     winner_name = lobby["players"][winner_id]["name"]
+    total_prize = lobby["bet"] * (len(lobby["players"]) - 1)
     
     message += f"\n🏆 **ПОБЕДИТЕЛЬ: {winner_name}!**\n"
-    message += f"💰 Выигрыш: +{lobby['bet'] * (len(lobby['players']) - 1)} см\n"
+    message += f"💰 Выигрыш: +{total_prize} см\n"
     
-    # Отправляем GIF победы
-    await send_game_gif(update, "victory")
-    
+    # Отправляем мем в зависимости от величины выигрыша
+    if total_prize >= 100:
+        await send_game_gif(update, "jackpot")
+    elif total_prize >= 50:
+        await send_game_gif(update, "win_big")
+    else:
+        await send_game_gif(update, "victory")
     # Обновляем статистику
     stats = load_dick_stats()
     
@@ -726,7 +805,7 @@ async def startgame_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message += f"\n**Итоги:**\n"
     for player_id, player in lobby["players"].items():
         if player_id == winner_id:
-            message += f"✅ {player['name']}: +{total_bet} см\n"
+            message += f"✅ {player['name']}: +{total_bet} см 💰\n"
         else:
             message += f"❌ {player['name']}: -{lobby['bet']} см\n"
     
@@ -978,7 +1057,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/dickplaces - топ по размеру шляпы\n"
         "/dickmini - мини игра на см\n\n"
         "🎲 **Кубик Войны (новое!):**\n"
-        "/dicewar [10-20] - создать игру\n"
+        "/dicewar [1-100] - создать игру (любая ставка!)\n"
         "/joindicewar [ID] - присоединиться\n"
         "/startgame [ID] - начать (2-4 игрока)\n\n"
         "📊 **Информация:**\n"
